@@ -1,9 +1,32 @@
+"""
+Warehouse Logistics Agent  |  Track 1 (Unit 2: Informed Search)
+----------------------------------------------------------------
+Retro pixel-game style UI with A* Search and Manhattan Distance.
+
+Features:
+  - Click to place Forklift, Package, and Loading Bay on the grid
+  - Two-leg A* pathfinding: Forklift -> Package -> Bay
+  - Live decision log showing every A* expansion with g, h, f values
+  - Pixel art sprites and retro 8-bit game aesthetic
+  - Pipeline phase tracker and real-time metrics
+"""
+
 import heapq
 import itertools
+import time
+import os
 import tkinter as tk
-import random
 
-# ─── Constants ────────────────────────────────────────────────────────────────
+# Try to load PIL for the forklift sprite image
+try:
+    from PIL import Image, ImageTk
+    HAS_PIL = True
+except ImportError:
+    HAS_PIL = False
+
+# ============================================================
+# 1. Grid Constants
+# ============================================================
 GRID_SIZE = 10
 OBSTACLES = {
     (2, 1), (2, 2), (2, 3),
@@ -11,87 +34,86 @@ OBSTACLES = {
     (6, 3), (6, 4), (6, 5),
     (7, 7), (8, 7)
 }
-CELL_SIZE = 52
-PADDING = 10
-PANEL_W = 210
+CELL = 52
+PAD = 8
+GRID_PX = GRID_SIZE * CELL
+PANEL_W = 340
+LOG_H = 220
 
-# Colors (dark theme)
-C_BG        = "#0f1117"
-C_PANEL     = "#1a1d27"
-C_GRID_BG   = "#14171f"
-C_BORDER    = "#2a2d3a"
-C_FREE      = "#1e2130"
-C_OBSTACLE  = "#3a3040"
-C_VISITED   = "#1a2a3a"
-C_PATH      = "#1e3020"
-C_START     = "#1a2a3a"
-C_GOAL      = "#3a1a1a"
-C_FORKLIFT  = "#4fc3f7"
-C_CONTAINER = "#e65100"
-C_ACCENT    = "#4fc3f7"
-C_ACCENT2   = "#81c784"
-C_WARN      = "#ef9a9a"
-C_TEXT      = "#e8eaf6"
-C_TEXT_DIM  = "#6b7280"
-C_YELLOW    = "#ffd54f"
+# Animation timing (ms)
+EXPAND_DELAY = 30
+MOVE_DELAY = 200
 
-PHASE_IDLE          = "idle"
-PHASE_ROUTE_TO_PKG  = "route_to_pkg"
-PHASE_PICKUP        = "pickup"
-PHASE_ROUTE_TO_BAY  = "route_to_bay"
-PHASE_DELIVERED     = "delivered"
+# ============================================================
+# 2. Retro Pixel Color Palette
+# ============================================================
+# -- Backgrounds
+C_BG          = "#1a1c2c"    # deep navy
+C_PANEL       = "#1f2233"    # panel dark
+C_GRID_BG     = "#262b44"    # grid background
+C_BORDER      = "#333a55"    # grid lines
 
-PHASES_LABELS = ["IDLE", "ROUTE TO PKG", "PICKUP", "ROUTE TO BAY", "DELIVERED"]
-PHASES_KEYS   = [PHASE_IDLE, PHASE_ROUTE_TO_PKG, PHASE_PICKUP, PHASE_ROUTE_TO_BAY, PHASE_DELIVERED]
+# -- Cells
+C_FLOOR_A     = "#2a2f4a"    # checkerboard dark
+C_FLOOR_B     = "#313759"    # checkerboard light
+C_SHELF       = "#5d3a1a"    # brown shelf
+C_SHELF_DARK  = "#3e2510"    # shelf outline
+C_SHELF_SLAT  = "#7a5230"    # shelf horizontal lines
+C_VISITED     = "#1a3050"    # expanded node
+C_VISITED_OL  = "#2a5080"    # expanded outline
+C_PATH        = "#3a6030"    # path fill
+C_PATH_OL     = "#5a9040"    # path outline
 
-# ─── State Globals ────────────────────────────────────────────────────────────
-forklift_pos         = None  # Initial forklift start position (cyan dot)
-container_pos        = None  # Package position (orange box)
-bay_pos              = None  # Destination position (red cell)
-place_mode           = "forklift"  # Current placement selection: "forklift", "container", "bay"
+# -- Markers
+C_START       = "#3b8e3f"    # pickup green
+C_START_OL    = "#2d6e30"
+C_GOAL        = "#c0392b"    # bay red
+C_GOAL_OL     = "#922b21"
 
-phase                = PHASE_IDLE
-sim_leg              = 1
-search_step          = 0
-move_step            = 0
-carrying             = False
-forklift_highlight   = False
-forklift_current_pos = None
+# -- Sprites
+C_FORK_BODY   = "#e8a838"    # forklift yellow-orange
+C_FORK_DARK   = "#b07820"    # forklift outline
+C_FORK_CAB    = "#384860"    # cab blue-gray
+C_FORK_MAST   = "#8898a8"    # mast silver
+C_WHEEL       = "#181818"    # wheels
 
-expanded_nodes       = []
-path_result          = []
+# -- Package
+C_PKG         = "#a05828"    # brown crate
+C_PKG_OL      = "#683818"    # crate outline
+C_PKG_BAND    = "#d8c8a0"    # packing band
 
-leg1_path            = []
-leg1_expanded_count  = 0
-leg1_expanded_order  = []
+# -- UI accents
+C_ACCENT      = "#4fc3f7"    # cyan
+C_GREEN       = "#6abe30"    # retro green
+C_YELLOW      = "#fbf236"    # retro yellow
+C_RED         = "#d95763"    # retro red
+C_ORANGE      = "#df7126"    # retro orange
+C_TEXT        = "#d0d8e8"    # bright text
+C_TEXT_DIM    = "#5a6278"    # dim text
+C_LOG_BG      = "#0d1018"    # terminal black
+C_LOG_TEXT    = "#50d050"    # terminal green
+C_LOG_CYAN    = "#50c8e8"    # log highlights
+C_LOG_YELLOW  = "#e8d850"    # log goals
+C_LOG_ORANGE  = "#e89030"    # log events
 
-leg2_path            = []
-leg2_expanded_count  = 0
-leg2_expanded_order  = []
+# -- Phase pipeline
+PHASE_IDLE         = "idle"
+PHASE_ROUTE_PKG    = "route_pkg"
+PHASE_PICKUP       = "pickup"
+PHASE_ROUTE_BAY    = "route_bay"
+PHASE_DELIVERED    = "delivered"
+PHASE_LABELS = ["IDLE", "TO PACKAGE", "PICKUP", "TO BAY", "DELIVERED"]
+PHASE_KEYS   = [PHASE_IDLE, PHASE_ROUTE_PKG, PHASE_PICKUP, PHASE_ROUTE_BAY, PHASE_DELIVERED]
 
-# UI Global components
-grid_canvas       = None
-btn_run           = None
-btn_set_forklift  = None
-btn_set_container = None
-btn_set_bay       = None
-phase_bar         = []
 
-# Global StringVars
-g_v_expanded = None
-g_v_cost     = None
-g_v_nodes    = None
-g_v_status   = None
-
-# ─── A* Algorithm ─────────────────────────────────────────────────────────────
+# ============================================================
+# 3. A* Search (with decision trace)
+# ============================================================
 def astar(grid, start, goal):
     """
-    Runs A* Search algorithm on the grid from start to goal.
-    grid: 10x10 2D list where 1 is obstacle, 0 is free space.
-    start: (x, y) tuple representing starting coordinates.
-    goal: (x, y) tuple representing target coordinates.
-    
-    Returns (path, expanded_count, expand_order_list).
+    A* Search with Manhattan distance heuristic.
+    Returns (path, expanded_count, trace_list).
+    trace_list: [{node, g, h, f, order}, ...] for the decision log.
     """
     counter = itertools.count()
     open_set = []
@@ -99,18 +121,20 @@ def astar(grid, start, goal):
     h0 = abs(start[0] - goal[0]) + abs(start[1] - goal[1])
     heapq.heappush(open_set, (h0, next(counter), start))
     came_from = {}
-    closed_set = set()
-    expand_order = []
-    expanded_count = 0
-    
+    closed = set()
+    expanded = 0
+    trace = []
+
     while open_set:
         f, _, current = heapq.heappop(open_set)
-        if current in closed_set:
+        if current in closed:
             continue
-        closed_set.add(current)
-        expand_order.append(current)
-        expanded_count += 1
-        
+        closed.add(current)
+        expanded += 1
+        g_here = g_score[current]
+        h_here = f - g_here
+        trace.append({"node": current, "g": g_here, "h": h_here, "f": f, "order": expanded})
+
         if current == goal:
             path = []
             cur = goal
@@ -119,8 +143,8 @@ def astar(grid, start, goal):
                 cur = came_from[cur]
             path.append(start)
             path.reverse()
-            return path, expanded_count, expand_order
-            
+            return path, expanded, trace
+
         cx, cy = current
         for dx, dy in [(0, -1), (0, 1), (-1, 0), (1, 0)]:
             nx, ny = cx + dx, cy + dy
@@ -134,717 +158,768 @@ def astar(grid, start, goal):
                     g_score[nb] = tg
                     h = abs(nx - goal[0]) + abs(ny - goal[1])
                     heapq.heappush(open_set, (tg + h, next(counter), nb))
-                    
-    return None, expanded_count, expand_order
 
-# ─── Grid Drawing ─────────────────────────────────────────────────────────────
-def cell_coords(x, y):
-    x1 = PADDING + x * CELL_SIZE
-    y1 = PADDING + y * CELL_SIZE
-    return x1, y1, x1 + CELL_SIZE, y1 + CELL_SIZE
+    return None, expanded, trace
 
-def cell_center(x, y):
-    x1, y1, x2, y2 = cell_coords(x, y)
-    return (x1 + x2) // 2, (y1 + y2) // 2
 
-def draw_base_grid(canvas):
-    canvas.delete("all")
-    canvas_w = PADDING * 2 + GRID_SIZE * CELL_SIZE
-    canvas_h = PADDING * 2 + GRID_SIZE * CELL_SIZE
-    canvas.create_rectangle(0, 0, canvas_w, canvas_h, fill=C_GRID_BG, outline="")
+# ============================================================
+# 4. Main Application
+# ============================================================
+class WarehouseApp:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Warehouse Logistics  |  A* Agent")
+        self.root.configure(bg=C_BG)
+        self.root.resizable(False, False)
 
-    # Determine path and visited states to draw
-    path_set = set()
-    if sim_leg == 1:
-        if phase != PHASE_ROUTE_TO_PKG or search_step >= len(leg1_expanded_order):
-            path_set = set(leg1_path)
-        visited_set = set(leg1_expanded_order[:search_step])
-    else:
-        if phase != PHASE_ROUTE_TO_BAY or search_step >= len(leg2_expanded_order):
-            path_set = set(leg2_path)
-        visited_set = set(leg2_expanded_order[:search_step])
+        # Build obstacle grid
+        self.grid = [[0] * GRID_SIZE for _ in range(GRID_SIZE)]
+        for x, y in OBSTACLES:
+            self.grid[y][x] = 1
 
-    for y in range(GRID_SIZE):
-        for x in range(GRID_SIZE):
-            cell = (x, y)
-            x1, y1, x2, y2 = cell_coords(x, y)
-            
-            if cell == forklift_pos:
-                # Forklift start marker: cyan border, dim fill
-                fill, ol, w = C_START, C_FORKLIFT, 2
-                canvas.create_rectangle(x1, y1, x2, y2, fill=fill, outline=ol, width=w)
-            elif cell == container_pos and not carrying:
-                # 2. Container/Package drawing: wooden crate box with horizontal/vertical plank lines
-                px1, py1, px2, py2 = x1 + 6, y1 + 6, x2 - 6, y2 - 6
-                canvas.create_rectangle(px1, py1, px2, py2, fill="#bf360c", outline="#e64a19", width=2)
-                # Plank lines
-                canvas.create_line(px1 + 2, py1 + 10, px2 - 2, py1 + 10, fill="#d84315", width=1)
-                canvas.create_line(px1 + 2, py1 + 20, px2 - 2, py1 + 20, fill="#d84315", width=1)
-                canvas.create_line(px1 + 2, py1 + 30, px2 - 2, py1 + 30, fill="#d84315", width=1)
-                canvas.create_line(px1 + 10, py1 + 2, px1 + 10, py2 - 2, fill="#d84315", width=1)
-                canvas.create_line(px1 + 20, py1 + 2, px1 + 20, py2 - 2, fill="#d84315", width=1)
-                canvas.create_line(px1 + 30, py1 + 2, px1 + 30, py2 - 2, fill="#d84315", width=1)
-                # White label in center
-                cx, cy = cell_center(x, y)
-                canvas.create_rectangle(cx - 10, cy - 6, cx + 10, cy + 6, fill="#ffffff", outline="")
-                canvas.create_text(cx, cy, text="PKG", fill="#0f1117", font=("Courier", 6, "bold"))
-            elif cell == bay_pos:
-                # 3. Loading Bay drawing: striped floor pattern in #3a1a1a and #4a2020 diagonal stripes
-                canvas.create_rectangle(x1, y1, x2, y2, fill="#3a1a1a", outline="#ef9a9a", width=2)
-                for offset in range(-52, 104, 14):
-                    canvas.create_line(x1, y1 + offset, x1 + 52, y1 + offset + 52, fill="#4a2020", width=5)
-                # Redraw border outline
-                canvas.create_rectangle(x1, y1, x2, y2, fill="", outline="#ef9a9a", width=2)
-                
-                cx, cy = cell_center(x, y)
-                canvas.create_text(cx, cy + 4, text="BAY", fill="#ef9a9a", font=("Courier", 10, "bold"))
-                
-                # Flashing yellow chevrons pointing inward when phase is DELIVERED
-                if phase == PHASE_DELIVERED:
-                    import time
-                    if int(time.time() * 2.5) % 2 == 0:
-                        canvas.create_text(cx - 16, cy - 8, text="▶▶", fill="#ffd54f", font=("Courier", 8, "bold"))
-                        canvas.create_text(cx + 16, cy - 8, text="◀◀", fill="#ffd54f", font=("Courier", 8, "bold"))
-                    else:
-                        canvas.create_text(cx - 16, cy - 8, text="▶▶", fill="#4a3520", font=("Courier", 8, "bold"))
-                        canvas.create_text(cx + 16, cy - 8, text="◀◀", fill="#4a3520", font=("Courier", 8, "bold"))
-            elif cell in OBSTACLES:
-                # 4. Shelf/Obstacle drawing: dark upright posts in #6a1b9a, horizontal boards, tiny boxes
-                canvas.create_rectangle(x1, y1, x2, y2, fill="#3a3040", outline="#5a4060", width=1)
-                canvas.create_rectangle(x1 + 4, y1 + 2, x1 + 7, y2 - 2, fill="#6a1b9a", outline="")
-                canvas.create_rectangle(x2 - 7, y1 + 2, x2 - 4, y2 - 2, fill="#6a1b9a", outline="")
-                for sy in [y1 + 14, y1 + 28, y1 + 42]:
-                    canvas.create_rectangle(x1 + 4, sy - 1, x2 - 4, sy + 1, fill="#8e24aa", outline="")
-                # Tiny boxes
-                canvas.create_rectangle(x1 + 10, y1 + 7, x1 + 15, y1 + 13, fill="#ce93d8", outline="")
-                canvas.create_rectangle(x1 + 22, y1 + 8, x1 + 28, y1 + 13, fill="#ce93d8", outline="")
-                canvas.create_rectangle(x1 + 16, y1 + 21, x1 + 22, y1 + 27, fill="#ce93d8", outline="")
-                canvas.create_rectangle(x1 + 28, y1 + 22, x1 + 33, y1 + 27, fill="#ce93d8", outline="")
-                canvas.create_rectangle(x1 + 12, y1 + 35, x1 + 18, y1 + 41, fill="#ce93d8", outline="")
-                canvas.create_rectangle(x1 + 24, y1 + 36, x1 + 30, y1 + 41, fill="#ce93d8", outline="")
+        # Placement state
+        self.forklift_pos = None
+        self.package_pos = None
+        self.bay_pos = None
+        self.place_mode = "forklift"
+
+        # Simulation state
+        self.phase = PHASE_IDLE
+        self.leg = 1
+        self.leg1_path = []
+        self.leg1_trace = []
+        self.leg1_expanded = 0
+        self.leg2_path = []
+        self.leg2_trace = []
+        self.leg2_expanded = 0
+        self.search_step = 0
+        self.move_step = 0
+        self.carrying = False
+        self.current_pos = None
+        self.current_dir = (1, 0)
+        self.search_time1 = 0
+        self.search_time2 = 0
+
+        # Sprite images
+        self.forklift_img = None
+        self.forklift_img_left = None
+        self.forklift_carry_img = None
+        self.forklift_carry_img_left = None
+        self._load_sprites()
+
+        # Build UI
+        self._build_ui()
+        self._draw_grid()
+        self._update_phase_bar()
+        self._update_placement_btns()
+
+    # ---- Sprite loading ----
+    def _load_sprites(self):
+        if not HAS_PIL:
+            return
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        sprite_path = os.path.join(script_dir, "forklift.png")
+        if os.path.exists(sprite_path):
+            try:
+                img = Image.open(sprite_path).convert("RGBA")
+                # Resize to fit cell
+                size = CELL - 8
+                img_r = img.resize((size, size), Image.NEAREST)
+                self.forklift_img = ImageTk.PhotoImage(img_r)
+                # Flipped for left direction
+                img_l = img_r.transpose(Image.FLIP_LEFT_RIGHT)
+                self.forklift_img_left = ImageTk.PhotoImage(img_l)
+                # For carrying, we tint slightly (just reuse same for now)
+                self.forklift_carry_img = self.forklift_img
+                self.forklift_carry_img_left = self.forklift_img_left
+            except Exception:
+                pass
+
+    # ---- UI Construction ----
+    def _build_ui(self):
+        # Window size
+        canvas_w = PAD * 2 + GRID_PX
+        win_w = canvas_w + PANEL_W + 12
+        win_h = max(canvas_w + 50, 750)  # ensure panel content fits
+        sx = (self.root.winfo_screenwidth() - win_w) // 2
+        sy = (self.root.winfo_screenheight() - win_h) // 2
+        self.root.geometry(f"{win_w}x{win_h}+{sx}+{sy}")
+
+        # -- Header bar --
+        header = tk.Frame(self.root, bg="#141628", height=42)
+        header.pack(side="top", fill="x")
+        header.pack_propagate(False)
+        tk.Label(
+            header, text="WAREHOUSE LOGISTICS  |  A* AGENT",
+            font=("Courier", 12, "bold"), bg="#141628", fg=C_ACCENT
+        ).pack(side="left", padx=14, pady=8)
+        self.status_var = tk.StringVar(value="Select placement mode, then click grid")
+        tk.Label(
+            header, textvariable=self.status_var,
+            font=("Courier", 9), bg="#141628", fg=C_TEXT_DIM
+        ).pack(side="right", padx=14)
+
+        # -- Body --
+        body = tk.Frame(self.root, bg=C_BG)
+        body.pack(side="top", fill="both", expand=True)
+
+        # Left: Canvas
+        left = tk.Frame(body, bg=C_BG, padx=6, pady=6)
+        left.pack(side="left", fill="both")
+        self.canvas = tk.Canvas(
+            left, width=canvas_w, height=canvas_w,
+            bg=C_GRID_BG, highlightthickness=0
+        )
+        self.canvas.pack()
+        self.canvas.bind("<Button-1>", self._on_click)
+
+        # Right: Panel
+        panel = tk.Frame(body, bg=C_PANEL, width=PANEL_W)
+        panel.pack(side="right", fill="both", expand=True, padx=(0, 6), pady=6)
+        panel.pack_propagate(False)
+
+        # -- Placement Buttons --
+        place_frame = tk.Frame(panel, bg=C_PANEL)
+        place_frame.pack(fill="x", padx=10, pady=(8, 4))
+        tk.Label(
+            place_frame, text="PLACEMENT", font=("Courier", 8, "bold"),
+            bg=C_PANEL, fg=C_TEXT_DIM
+        ).pack(anchor="w")
+
+        btn_row = tk.Frame(place_frame, bg=C_PANEL)
+        btn_row.pack(fill="x", pady=(4, 0))
+
+        self.btn_forklift = tk.Button(
+            btn_row, text="FORKLIFT", font=("Courier", 8, "bold"),
+            relief="flat", cursor="hand2", padx=4, pady=3,
+            command=lambda: self._set_mode("forklift")
+        )
+        self.btn_forklift.pack(side="left", expand=True, fill="x", padx=(0, 2))
+
+        self.btn_package = tk.Button(
+            btn_row, text="PACKAGE", font=("Courier", 8, "bold"),
+            relief="flat", cursor="hand2", padx=4, pady=3,
+            command=lambda: self._set_mode("package")
+        )
+        self.btn_package.pack(side="left", expand=True, fill="x", padx=1)
+
+        self.btn_bay = tk.Button(
+            btn_row, text="BAY", font=("Courier", 8, "bold"),
+            relief="flat", cursor="hand2", padx=4, pady=3,
+            command=lambda: self._set_mode("bay")
+        )
+        self.btn_bay.pack(side="left", expand=True, fill="x", padx=(2, 0))
+
+        # -- Separator --
+        tk.Frame(panel, bg=C_BORDER, height=1).pack(fill="x", padx=10, pady=4)
+
+        # -- Pipeline --
+        pipe_frame = tk.Frame(panel, bg=C_PANEL)
+        pipe_frame.pack(fill="x", padx=10)
+        tk.Label(
+            pipe_frame, text="PIPELINE", font=("Courier", 8, "bold"),
+            bg=C_PANEL, fg=C_TEXT_DIM
+        ).pack(anchor="w")
+
+        self.phase_bar = []
+        for lbl in PHASE_LABELS:
+            row = tk.Frame(pipe_frame, bg=C_PANEL)
+            row.pack(fill="x")
+            dot = tk.Label(row, text=">", bg=C_PANEL, fg=C_BORDER, font=("Courier", 9, "bold"))
+            dot.pack(side="left")
+            ltxt = tk.Label(row, text=lbl, bg=C_PANEL, fg=C_TEXT_DIM, font=("Courier", 8))
+            ltxt.pack(side="left", padx=4)
+            self.phase_bar.append((dot, ltxt))
+
+        # -- Separator --
+        tk.Frame(panel, bg=C_BORDER, height=1).pack(fill="x", padx=10, pady=4)
+
+        # -- Metrics --
+        met_frame = tk.Frame(panel, bg=C_PANEL)
+        met_frame.pack(fill="x", padx=10)
+        tk.Label(
+            met_frame, text="METRICS", font=("Courier", 8, "bold"),
+            bg=C_PANEL, fg=C_TEXT_DIM
+        ).pack(anchor="w")
+
+        self.cost_var = tk.StringVar(value="--")
+        self.nodes_var = tk.StringVar(value="--")
+        self.time_var = tk.StringVar(value="--")
+
+        for label, var, color in [
+            ("PATH COST", self.cost_var, C_GREEN),
+            ("NODES EXPANDED", self.nodes_var, C_ACCENT),
+            ("SEARCH TIME", self.time_var, C_YELLOW),
+        ]:
+            f = tk.Frame(met_frame, bg=C_PANEL)
+            f.pack(fill="x", pady=1)
+            tk.Label(f, text=label, bg=C_PANEL, fg=C_TEXT_DIM, font=("Courier", 7)).pack(anchor="w")
+            tk.Label(f, textvariable=var, bg=C_PANEL, fg=color, font=("Courier", 11, "bold")).pack(anchor="w")
+
+        # -- Separator --
+        tk.Frame(panel, bg=C_BORDER, height=1).pack(fill="x", padx=10, pady=4)
+
+        # -- Decision Log --
+        log_frame_outer = tk.Frame(panel, bg=C_PANEL)
+        log_frame_outer.pack(fill="both", expand=True, padx=10, pady=(0, 4))
+        tk.Label(
+            log_frame_outer, text="DECISION LOG", font=("Courier", 8, "bold"),
+            bg=C_PANEL, fg=C_TEXT_DIM
+        ).pack(anchor="w")
+
+        log_inner = tk.Frame(log_frame_outer, bg=C_LOG_BG, bd=2, relief="sunken")
+        log_inner.pack(fill="both", expand=True, pady=(2, 0))
+        scrollbar = tk.Scrollbar(log_inner, troughcolor=C_LOG_BG)
+        scrollbar.pack(side="right", fill="y")
+        self.log_text = tk.Text(
+            log_inner, bg=C_LOG_BG, fg=C_LOG_TEXT,
+            font=("Courier", 8), wrap="none", relief="flat",
+            insertbackground=C_LOG_TEXT, yscrollcommand=scrollbar.set,
+            padx=4, pady=4
+        )
+        self.log_text.pack(side="left", fill="both", expand=True)
+        scrollbar.config(command=self.log_text.yview)
+
+        # Log tags
+        self.log_text.tag_config("event", foreground=C_LOG_ORANGE)
+        self.log_text.tag_config("goal", foreground=C_LOG_YELLOW)
+        self.log_text.tag_config("move", foreground=C_LOG_CYAN)
+        self.log_text.tag_config("info", foreground=C_TEXT_DIM)
+
+        # -- Separator --
+        tk.Frame(panel, bg=C_BORDER, height=1).pack(fill="x", padx=10, pady=2)
+
+        # -- Buttons --
+        btn_frame = tk.Frame(panel, bg=C_PANEL)
+        btn_frame.pack(fill="x", padx=10, pady=(2, 8))
+
+        self.run_btn = tk.Button(
+            btn_frame, text="RUN SIMULATION", font=("Courier", 10, "bold"),
+            bg=C_GREEN, fg="#0a0a0a", relief="flat", cursor="hand2",
+            activebackground="#8ade50", padx=8, pady=6,
+            command=self._run_simulation, state="disabled"
+        )
+        self.run_btn.pack(fill="x", pady=(0, 4))
+
+        self.reset_btn = tk.Button(
+            btn_frame, text="RESET", font=("Courier", 9, "bold"),
+            bg=C_BORDER, fg=C_TEXT, relief="flat", cursor="hand2",
+            activebackground="#4a5070", padx=8, pady=4,
+            command=self._reset
+        )
+        self.reset_btn.pack(fill="x")
+
+        # Initial log message
+        self._log("--- Warehouse Logistics Agent ---", "event")
+        self._log("A* Search | Manhattan Distance", "info")
+        self._log("")
+        self._log("1. Select FORKLIFT, PACKAGE, BAY", "info")
+        self._log("2. Click cells on the grid", "info")
+        self._log("3. Press RUN SIMULATION", "info")
+
+    # ---- Logging ----
+    def _log(self, msg, tag=None):
+        self.log_text.insert("end", msg + "\n", tag)
+        self.log_text.see("end")
+
+    # ---- Placement ----
+    def _set_mode(self, mode):
+        if self.phase not in (PHASE_IDLE, PHASE_DELIVERED):
+            return
+        self.place_mode = mode
+        self._update_placement_btns()
+
+    def _update_placement_btns(self):
+        for btn, mode, active_bg, active_fg in [
+            (self.btn_forklift, "forklift", C_ACCENT, "#0a0a0a"),
+            (self.btn_package, "package", C_ORANGE, "#0a0a0a"),
+            (self.btn_bay, "bay", C_RED, "#ffffff"),
+        ]:
+            if self.place_mode == mode:
+                btn.config(bg=active_bg, fg=active_fg)
             else:
-                # Draw standard grid cells
-                if cell in path_set:
-                    fill, ol, w = C_PATH, C_BORDER, 1
-                elif cell in visited_set:
-                    fill, ol, w = C_VISITED, C_BORDER, 1
+                btn.config(bg=C_BORDER, fg=C_TEXT_DIM)
+
+    def _on_click(self, event):
+        if self.phase not in (PHASE_IDLE, PHASE_DELIVERED):
+            return
+        x = (event.x - PAD) // CELL
+        y = (event.y - PAD) // CELL
+        if not (0 <= x < GRID_SIZE and 0 <= y < GRID_SIZE):
+            return
+        if (x, y) in OBSTACLES:
+            self._log("  Blocked cell -- select a free one.", "event")
+            return
+
+        # Clear if occupied
+        if (x, y) == self.forklift_pos:
+            self.forklift_pos = None
+        if (x, y) == self.package_pos:
+            self.package_pos = None
+        if (x, y) == self.bay_pos:
+            self.bay_pos = None
+
+        if self.place_mode == "forklift":
+            self.forklift_pos = (x, y)
+            self._log(f"  Forklift placed at ({x},{y})", "goal")
+        elif self.place_mode == "package":
+            self.package_pos = (x, y)
+            self._log(f"  Package placed at ({x},{y})", "goal")
+        elif self.place_mode == "bay":
+            self.bay_pos = (x, y)
+            self._log(f"  Bay placed at ({x},{y})", "goal")
+
+        # Check readiness
+        all_set = all([self.forklift_pos, self.package_pos, self.bay_pos])
+        self.run_btn.config(state="normal" if all_set else "disabled")
+        self.status_var.set("Ready -- press RUN" if all_set else "Place all 3 markers on the grid")
+        self._draw_grid()
+
+    # ---- Phase Bar ----
+    def _update_phase_bar(self):
+        idx = PHASE_KEYS.index(self.phase) if self.phase in PHASE_KEYS else 0
+        for i, (dot, lbl) in enumerate(self.phase_bar):
+            if i < idx:
+                dot.config(fg=C_GREEN)
+                lbl.config(fg=C_TEXT_DIM)
+            elif i == idx:
+                dot.config(fg=C_ACCENT)
+                lbl.config(fg=C_TEXT)
+            else:
+                dot.config(fg=C_BORDER)
+                lbl.config(fg=C_BORDER)
+
+    # ---- Grid Drawing ----
+    def _cell_xy(self, x, y):
+        x1 = PAD + x * CELL
+        y1 = PAD + y * CELL
+        return x1, y1, x1 + CELL, y1 + CELL
+
+    def _cell_center(self, x, y):
+        x1, y1, x2, y2 = self._cell_xy(x, y)
+        return (x1 + x2) // 2, (y1 + y2) // 2
+
+    def _draw_grid(self):
+        c = self.canvas
+        c.delete("all")
+        canvas_size = PAD * 2 + GRID_PX
+
+        # Background
+        c.create_rectangle(0, 0, canvas_size, canvas_size, fill=C_GRID_BG, outline="")
+
+        # Determine current path and visited sets
+        if self.leg == 1:
+            visited_set = set(
+                e["node"] for e in self.leg1_trace[:self.search_step]
+            ) if self.leg1_trace else set()
+            path_set = set(self.leg1_path) if (
+                self.phase != PHASE_ROUTE_PKG or self.search_step >= len(self.leg1_trace)
+            ) else set()
+            path_list = self.leg1_path
+        else:
+            visited_set = set(
+                e["node"] for e in self.leg2_trace[:self.search_step]
+            ) if self.leg2_trace else set()
+            path_set = set(self.leg2_path) if (
+                self.phase != PHASE_ROUTE_BAY or self.search_step >= len(self.leg2_trace)
+            ) else set()
+            path_list = self.leg2_path
+
+        # Draw cells
+        for y in range(GRID_SIZE):
+            for x in range(GRID_SIZE):
+                cell = (x, y)
+                x1, y1, x2, y2 = self._cell_xy(x, y)
+
+                if cell in OBSTACLES:
+                    self._draw_shelf(x, y)
+                elif cell in path_set and cell not in (self.forklift_pos, self.package_pos, self.bay_pos):
+                    c.create_rectangle(x1, y1, x2, y2, fill=C_PATH, outline=C_PATH_OL, width=1)
+                    # Direction arrow
+                    if cell in path_set and path_list:
+                        try:
+                            idx = path_list.index(cell)
+                            if idx < len(path_list) - 1:
+                                nx, ny = path_list[idx + 1]
+                                dx, dy = nx - x, ny - y
+                                arrows = {(1,0): ">", (-1,0): "<", (0,1): "v", (0,-1): "^"}
+                                arr = arrows.get((dx, dy), "")
+                                cx, cy = self._cell_center(x, y)
+                                c.create_text(cx, cy, text=arr, fill=C_GREEN, font=("Courier", 14, "bold"))
+                        except ValueError:
+                            pass
+                elif cell in visited_set and cell not in (self.forklift_pos, self.package_pos, self.bay_pos):
+                    c.create_rectangle(x1, y1, x2, y2, fill=C_VISITED, outline=C_VISITED_OL, width=1)
+                    cx, cy = self._cell_center(x, y)
+                    c.create_text(cx, cy, text="+", fill=C_VISITED_OL, font=("Courier", 10))
                 else:
-                    fill, ol, w = C_FREE, C_BORDER, 1
-                canvas.create_rectangle(x1, y1, x2, y2, fill=fill, outline=ol, width=w)
-                
-                # 9. Cell coordinate labels: draw tiny (x,y) coordinates in corners in IDLE/placement phase
-                if phase in (PHASE_IDLE, PHASE_DELIVERED):
-                    canvas.create_text(x1 + 12, y1 + 8, text=f"{x},{y}", fill="#2a3a4a", font=("Courier", 6))
+                    fill = C_FLOOR_A if (x + y) % 2 == 0 else C_FLOOR_B
+                    c.create_rectangle(x1, y1, x2, y2, fill=fill, outline=C_BORDER, width=1)
+                    # Coordinate labels in idle
+                    if self.phase in (PHASE_IDLE, PHASE_DELIVERED):
+                        cx, cy = self._cell_center(x, y)
+                        c.create_text(cx, cy, text=f"{x},{y}", fill="#303858", font=("Courier", 7))
 
-    # Draw START text label inside forklift start cell
-    if forklift_pos is not None:
-        cx, cy = cell_center(*forklift_pos)
-        canvas.create_text(cx, cy - 5, text="▶", fill=C_ACCENT, font=("Courier", 11, "bold"))
-        canvas.create_text(cx, cy + 8, text="START", fill=C_ACCENT, font=("Courier", 6, "bold"))
+        # Draw markers
+        if self.forklift_pos and self.current_pos is None:
+            self._draw_start_marker(*self.forklift_pos)
+        if self.package_pos and not self.carrying:
+            self._draw_package_marker(*self.package_pos)
+        if self.bay_pos:
+            self._draw_bay_marker(*self.bay_pos)
 
-    # 7. Path visualization: small arrow chevrons rotated in direction of travel
-    if path_set:
-        for i in range(len(path_result)):
-            cell = path_result[i]
-            if cell in (forklift_pos, container_pos, bay_pos):
-                continue
-            if cell not in path_set:
-                continue
-            cx2, cy2 = cell_center(cell[0], cell[1])
-            
-            arrow = "▶"
-            if i < len(path_result) - 1:
-                next_cell = path_result[i + 1]
-                dx = next_cell[0] - cell[0]
-                dy = next_cell[1] - cell[1]
-                if dx > 0: arrow = "▶"
-                elif dx < 0: arrow = "◀"
-                elif dy > 0: arrow = "▼"
-                elif dy < 0: arrow = "▲"
-            canvas.create_text(cx2, cy2, text=arrow, fill=C_ACCENT2, font=("Courier", 10, "bold"))
+        # Draw delivered package at bay
+        if self.phase == PHASE_DELIVERED and self.bay_pos:
+            self._draw_delivered_pkg(*self.bay_pos)
 
-    # 6. Expanded node visualization: draw small diamond shape in #1a3a5a centered
-    if visited_set:
-        for vx, vy in visited_set:
-            if (vx, vy) in (forklift_pos, container_pos, bay_pos):
-                continue
-            cx3, cy3 = cell_center(vx, vy)
-            canvas.create_polygon(cx3, cy3 - 6, cx3 + 6, cy3, cx3, cy3 + 6, cx3 - 6, cy3, fill="#1a3a5a", outline="#2196f3", width=1)
+        # Draw forklift sprite if active
+        if self.current_pos is not None:
+            self._draw_forklift_sprite(*self.current_pos)
 
-    # Render forklift if active
-    if forklift_current_pos is not None:
-        draw_forklift(canvas, forklift_current_pos[0], forklift_current_pos[1], carrying, forklift_highlight)
+        # Grid border (retro double-border)
+        c.create_rectangle(PAD - 2, PAD - 2, PAD + GRID_PX + 1, PAD + GRID_PX + 1,
+                           outline=C_ACCENT, width=2)
+        c.create_rectangle(PAD - 4, PAD - 4, PAD + GRID_PX + 3, PAD + GRID_PX + 3,
+                           outline=C_BORDER, width=1)
 
-    # 8. Glowing Grid border around canvas
-    canvas.create_rectangle(1, 1, canvas_w - 1, canvas_h - 1, outline="#4fc3f7", width=2)
-    canvas.create_rectangle(3, 3, canvas_w - 3, canvas_h - 3, outline="#1565c0", width=1)
+    def _draw_shelf(self, x, y):
+        c = self.canvas
+        x1, y1, x2, y2 = self._cell_xy(x, y)
+        # Base
+        c.create_rectangle(x1 + 2, y1 + 2, x2 - 2, y2 - 2,
+                           fill=C_SHELF, outline=C_SHELF_DARK, width=2)
+        # Slats
+        for i in range(1, 4):
+            sy = y1 + i * (CELL // 4)
+            c.create_line(x1 + 5, sy, x2 - 5, sy, fill=C_SHELF_SLAT, width=2)
+        # Tiny boxes on shelves
+        c.create_rectangle(x1 + 8, y1 + 6, x1 + 18, y1 + 12, fill="#c0a060", outline=C_SHELF_DARK)
+        c.create_rectangle(x1 + 22, y1 + 6, x1 + 34, y1 + 12, fill="#a08848", outline=C_SHELF_DARK)
+        c.create_rectangle(x1 + 10, y1 + CELL // 4 + 4, x1 + 24, y1 + CELL // 4 + 10,
+                           fill="#b89858", outline=C_SHELF_DARK)
 
-def draw_forklift(canvas, x, y, carrying, highlight=False):
-    # 1. Forklift drawing using canvas primitives
-    x1, y1, x2, y2 = cell_coords(x, y)
-    cx, cy = cell_center(x, y)
-    
-    # Determine orientation direction based on path
-    direction = "right"
-    path = leg1_path if sim_leg == 1 else leg2_path
-    if path and (x, y) in path:
-        idx = path.index((x, y))
-        if idx < len(path) - 1:
-            nx, ny = path[idx + 1]
-            if nx > x: direction = "right"
-            elif nx < x: direction = "left"
-            elif ny > y: direction = "down"
-            elif ny < y: direction = "up"
-        elif idx > 0:
-            px, py = path[idx - 1]
-            if x > px: direction = "right"
-            elif x < px: direction = "left"
-            elif y > py: direction = "down"
-            elif y < py: direction = "up"
-            
-    body_col = "#ffffff" if highlight else "#1565c0"
-    ol_col = "#cccccc" if highlight else "#0d47a1"
-    
-    if direction == "right":
-        # Wheels
-        canvas.create_oval(cx - 10, cy - 13, cx - 4, cy - 9, fill="#263238", outline="#1a1a1a")
-        canvas.create_oval(cx - 10, cy + 9, cx - 4, cy + 13, fill="#263238", outline="#1a1a1a")
-        canvas.create_oval(cx + 2, cy - 13, cx + 8, cy - 9, fill="#263238", outline="#1a1a1a")
-        canvas.create_oval(cx + 2, cy + 9, cx + 8, cy + 13, fill="#263238", outline="#1a1a1a")
-        # Forks
-        canvas.create_line(cx + 10, cy - 5, cx + 20, cy - 5, fill="#4fc3f7", width=2)
-        canvas.create_line(cx + 10, cy + 5, cx + 20, cy + 5, fill="#4fc3f7", width=2)
-        # Package on forks
-        if carrying:
-            canvas.create_rectangle(cx + 11, cy - 8, cx + 19, cy + 8, fill="#e65100", outline="#ffffff", width=1)
-        # Mast
-        canvas.create_line(cx + 8, cy - 10, cx + 8, cy + 10, fill="#90caf9", width=1.5)
-        canvas.create_line(cx + 10, cy - 10, cx + 10, cy + 10, fill="#90caf9", width=1.5)
-        # Body
-        canvas.create_rectangle(cx - 14, cy - 10, cx + 8, cy + 10, fill=body_col, outline=ol_col)
-        # Cabin
-        canvas.create_rectangle(cx - 12, cy - 14, cx - 2, cy + 8, fill="#1976d2", outline=ol_col)
-        # Headlight
-        canvas.create_oval(cx + 6, cy - 7, cx + 9, cy - 4, fill="#ffd54f", outline="")
-        
-    elif direction == "left":
-        # Wheels
-        canvas.create_oval(cx - 8, cy - 13, cx - 2, cy - 9, fill="#263238", outline="#1a1a1a")
-        canvas.create_oval(cx - 8, cy + 9, cx - 2, cy + 13, fill="#263238", outline="#1a1a1a")
-        canvas.create_oval(cx + 4, cy - 13, cx + 10, cy - 9, fill="#263238", outline="#1a1a1a")
-        canvas.create_oval(cx + 4, cy + 9, cx + 10, cy + 13, fill="#263238", outline="#1a1a1a")
-        # Forks
-        canvas.create_line(cx - 10, cy - 5, cx - 20, cy - 5, fill="#4fc3f7", width=2)
-        canvas.create_line(cx - 10, cy + 5, cx - 20, cy + 5, fill="#4fc3f7", width=2)
-        # Package on forks
-        if carrying:
-            canvas.create_rectangle(cx - 19, cy - 8, cx - 11, cy + 8, fill="#e65100", outline="#ffffff", width=1)
-        # Mast
-        canvas.create_line(cx - 8, cy - 10, cx - 8, cy + 10, fill="#90caf9", width=1.5)
-        canvas.create_line(cx - 10, cy - 10, cx - 10, cy + 10, fill="#90caf9", width=1.5)
-        # Body
-        canvas.create_rectangle(cx - 8, cy - 10, cx + 14, cy + 10, fill=body_col, outline=ol_col)
-        # Cabin
-        canvas.create_rectangle(cx + 2, cy - 14, cx + 12, cy + 8, fill="#1976d2", outline=ol_col)
-        # Headlight
-        canvas.create_oval(cx - 9, cy - 7, cx - 6, cy - 4, fill="#ffd54f", outline="")
-        
-    elif direction == "down":
-        # Wheels
-        canvas.create_oval(cx - 13, cy - 10, cx - 9, cy - 4, fill="#263238", outline="#1a1a1a")
-        canvas.create_oval(cx + 9, cy - 10, cx + 13, cy - 4, fill="#263238", outline="#1a1a1a")
-        canvas.create_oval(cx - 13, cy + 2, cx - 9, cy + 8, fill="#263238", outline="#1a1a1a")
-        canvas.create_oval(cx + 9, cy + 2, cx + 13, cy + 8, fill="#263238", outline="#1a1a1a")
-        # Forks
-        canvas.create_line(cx - 5, cy + 10, cx - 5, cy + 20, fill="#4fc3f7", width=2)
-        canvas.create_line(cx + 5, cy + 10, cx + 5, cy + 20, fill="#4fc3f7", width=2)
-        # Package on forks
-        if carrying:
-            canvas.create_rectangle(cx - 8, cy + 11, cx + 8, cy + 19, fill="#e65100", outline="#ffffff", width=1)
-        # Mast
-        canvas.create_line(cx - 10, cy + 8, cx + 10, cy + 8, fill="#90caf9", width=1.5)
-        canvas.create_line(cx - 10, cy + 10, cx + 10, cy + 10, fill="#90caf9", width=1.5)
-        # Body
-        canvas.create_rectangle(cx - 10, cy - 14, cx + 10, cy + 8, fill=body_col, outline=ol_col)
-        # Cabin
-        canvas.create_rectangle(cx - 8, cy - 12, cx + 8, cy - 2, fill="#1976d2", outline=ol_col)
-        # Headlight
-        canvas.create_oval(cx + 5, cy + 5, cx + 8, cy + 8, fill="#ffd54f", outline="")
-        
-    elif direction == "up":
-        # Wheels
-        canvas.create_oval(cx - 13, cy - 8, cx - 9, cy - 2, fill="#263238", outline="#1a1a1a")
-        canvas.create_oval(cx + 9, cy - 8, cx + 13, cy - 2, fill="#263238", outline="#1a1a1a")
-        canvas.create_oval(cx - 13, cy + 4, cx - 9, cy + 10, fill="#263238", outline="#1a1a1a")
-        canvas.create_oval(cx + 9, cy + 4, cx + 13, cy + 10, fill="#263238", outline="#1a1a1a")
-        # Forks
-        canvas.create_line(cx - 5, cy - 10, cx - 5, cy - 20, fill="#4fc3f7", width=2)
-        canvas.create_line(cx + 5, cy - 10, cx + 5, cy - 20, fill="#4fc3f7", width=2)
-        # Package on forks
-        if carrying:
-            canvas.create_rectangle(cx - 8, cy - 19, cx + 8, cy - 11, fill="#e65100", outline="#ffffff", width=1)
-        # Mast
-        canvas.create_line(cx - 10, cy - 8, cx + 10, cy - 8, fill="#90caf9", width=1.5)
-        canvas.create_line(cx - 10, cy - 10, cx + 10, cy - 10, fill="#90caf9", width=1.5)
-        # Body
-        canvas.create_rectangle(cx - 10, cy - 8, cx + 10, cy + 14, fill=body_col, outline=ol_col)
-        # Cabin
-        canvas.create_rectangle(cx - 8, cy + 2, cx + 8, cy + 12, fill="#1976d2", outline=ol_col)
-        # Headlight
-        canvas.create_oval(cx - 8, cy - 8, cx - 5, cy - 5, fill="#ffd54f", outline="")
+    def _draw_start_marker(self, x, y):
+        c = self.canvas
+        x1, y1, x2, y2 = self._cell_xy(x, y)
+        c.create_rectangle(x1 + 3, y1 + 3, x2 - 3, y2 - 3,
+                           fill=C_START, outline=C_START_OL, width=2)
+        cx, cy = self._cell_center(x, y)
+        c.create_text(cx, cy - 4, text="START", fill="#ffffff", font=("Courier", 8, "bold"))
+        c.create_text(cx, cy + 8, text=">>", fill="#80e080", font=("Courier", 9, "bold"))
 
-# ─── Visual Pipeline ──────────────────────────────────────────────────────────
-C_FUTURE_DOT    = "#4a4e5d"
-C_FUTURE_LBL    = "#555865"
-C_COMPLETED_LBL = "#888c9d"
+    def _draw_package_marker(self, x, y):
+        c = self.canvas
+        cx, cy = self._cell_center(x, y)
+        sz = 18
+        # Crate
+        c.create_rectangle(cx - sz, cy - sz, cx + sz, cy + sz,
+                           fill=C_PKG, outline=C_PKG_OL, width=2)
+        # Cross bands
+        c.create_line(cx - sz, cy, cx + sz, cy, fill=C_PKG_BAND, width=2)
+        c.create_line(cx, cy - sz, cx, cy + sz, fill=C_PKG_BAND, width=2)
+        # Label
+        c.create_text(cx, cy + sz + 8, text="PKG", fill=C_ORANGE, font=("Courier", 7, "bold"))
 
-def update_phase_bar():
-    idx = PHASES_KEYS.index(phase) if phase in PHASES_KEYS else 0
-    for i, (dot, lbl) in enumerate(phase_bar):
-        if i < idx:
-            dot.config(fg=C_ACCENT2)  # green
-            lbl.config(fg=C_COMPLETED_LBL)
-        elif i == idx:
-            dot.config(fg=C_ACCENT)   # cyan
-            lbl.config(fg=C_TEXT)     # bright text
-        else:
-            dot.config(fg=C_FUTURE_DOT)  # dim
-            lbl.config(fg=C_FUTURE_LBL)
+    def _draw_bay_marker(self, x, y):
+        c = self.canvas
+        x1, y1, x2, y2 = self._cell_xy(x, y)
+        c.create_rectangle(x1 + 3, y1 + 3, x2 - 3, y2 - 3,
+                           fill=C_GOAL, outline=C_GOAL_OL, width=2)
+        # Hazard stripes
+        for i in range(-2, 6):
+            sx = x1 + 5 + i * 12
+            c.create_line(sx, y1 + 4, sx + 10, y2 - 4, fill="#e06050", width=3)
+        # Redraw border on top
+        c.create_rectangle(x1 + 3, y1 + 3, x2 - 3, y2 - 3,
+                           fill="", outline=C_GOAL_OL, width=2)
+        cx, cy = self._cell_center(x, y)
+        c.create_text(cx, cy, text="BAY", fill="#ffffff", font=("Courier", 9, "bold"))
 
-def select_place_mode(mode):
-    global place_mode
-    place_mode = mode
-    update_placement_buttons()
+    def _draw_delivered_pkg(self, x, y):
+        c = self.canvas
+        cx, cy = self._cell_center(x, y)
+        c.create_rectangle(cx - 8, cy + 6, cx + 8, cy + 18,
+                           fill=C_PKG, outline=C_PKG_OL, width=1)
+        c.create_line(cx - 8, cy + 12, cx + 8, cy + 12, fill=C_PKG_BAND, width=1)
 
-def update_placement_buttons():
-    if place_mode == "forklift":
-        btn_set_forklift.config(bg=C_FORKLIFT, fg=C_BG, activebackground=C_FORKLIFT, activeforeground=C_BG)
-        btn_set_container.config(bg="#2a2d3a", fg=C_TEXT_DIM, activebackground="#2a2d3a", activeforeground=C_TEXT_DIM)
-        btn_set_bay.config(bg="#2a2d3a", fg=C_TEXT_DIM, activebackground="#2a2d3a", activeforeground=C_TEXT_DIM)
-    elif place_mode == "container":
-        btn_set_forklift.config(bg="#2a2d3a", fg=C_TEXT_DIM, activebackground="#2a2d3a", activeforeground=C_TEXT_DIM)
-        btn_set_container.config(bg=C_CONTAINER, fg="#ffffff", activebackground=C_CONTAINER, activeforeground="#ffffff")
-        btn_set_bay.config(bg="#2a2d3a", fg=C_TEXT_DIM, activebackground="#2a2d3a", activeforeground=C_TEXT_DIM)
-    elif place_mode == "bay":
-        btn_set_forklift.config(bg="#2a2d3a", fg=C_TEXT_DIM, activebackground="#2a2d3a", activeforeground=C_TEXT_DIM)
-        btn_set_container.config(bg="#2a2d3a", fg=C_TEXT_DIM, activebackground="#2a2d3a", activeforeground=C_TEXT_DIM)
-        btn_set_bay.config(bg=C_WARN, fg=C_BG, activebackground=C_WARN, activeforeground=C_BG)
+    def _draw_forklift_sprite(self, x, y):
+        c = self.canvas
+        cx, cy = self._cell_center(x, y)
+        dx, _ = self.current_dir
 
-def disable_placement_buttons():
-    btn_set_forklift.config(state="disabled")
-    btn_set_container.config(state="disabled")
-    btn_set_bay.config(state="disabled")
-
-def enable_placement_buttons():
-    btn_set_forklift.config(state="normal")
-    btn_set_container.config(state="normal")
-    btn_set_bay.config(state="normal")
-    update_placement_buttons()
-
-# ─── Animation Ticks ──────────────────────────────────────────────────────────
-def tick_search(canvas, root, v_expanded, v_status):
-    global search_step, phase
-    
-    if sim_leg == 1:
-        nodes = leg1_expanded_order
-    else:
-        nodes = leg2_expanded_order
-        
-    if search_step < len(nodes):
-        search_step += 1
-        v_expanded.set(str(search_step))
-        v_status.set(f"Expanding {search_step}/{len(nodes)}")
-        draw_base_grid(canvas)
-        update_phase_bar()
-        speed = max(10, 80 - search_step)
-        root.after(speed, lambda: tick_search(canvas, root, v_expanded, v_status))
-    else:
-        if sim_leg == 1:
-            v_status.set(f"Leg 1 path found: {len(leg1_path)-1} steps")
-            draw_base_grid(canvas)
-            root.after(500, lambda: start_move_leg1(canvas, root, v_status))
-        else:
-            v_status.set(f"Leg 2 path found: {len(leg2_path)-1} steps")
-            draw_base_grid(canvas)
-            root.after(500, lambda: start_move_leg2(canvas, root, v_status))
-
-def tick_move(canvas, root, v_status):
-    global move_step, forklift_current_pos, forklift_highlight
-    
-    if sim_leg == 1:
-        path = leg1_path
-        status_label = "Navigating to package"
-    else:
-        path = leg2_path
-        status_label = "Navigating to bay"
-        
-    if move_step < len(path):
-        forklift_current_pos = path[move_step]
-        
-        if move_step == len(path) - 1:
-            if sim_leg == 1:
-                # Transition to Phase 2: PICKUP
-                trigger_pickup(canvas, root, v_status)
+        # Try using loaded sprite image
+        if self.forklift_img is not None:
+            if self.carrying:
+                img = self.forklift_carry_img_left if dx < 0 else self.forklift_carry_img
             else:
-                # Transition to Phase 4: DELIVER
-                forklift_highlight = True
-                v_status.set("DELIVERING...")
-                draw_base_grid(canvas)
-                root.after(400, lambda: finalize_mission_delivered(canvas, root, v_status))
+                img = self.forklift_img_left if dx < 0 else self.forklift_img
+            if img:
+                c.create_image(cx, cy, image=img, anchor="center")
+                # Draw small package on top if carrying
+                if self.carrying:
+                    c.create_rectangle(cx - 6, cy - 20, cx + 6, cy - 12,
+                                       fill=C_PKG, outline=C_PKG_OL, width=1)
+                    c.create_line(cx - 6, cy - 16, cx + 6, cy - 16, fill=C_PKG_BAND, width=1)
+                return
+
+        # Fallback: draw pixel forklift with canvas primitives
+        self._draw_forklift_canvas(x, y)
+
+    def _draw_forklift_canvas(self, x, y):
+        """Pixel art forklift drawn with canvas rectangles."""
+        c = self.canvas
+        cx, cy = self._cell_center(x, y)
+        dx, dy = self.current_dir
+
+        # Wheels
+        if dx != 0:  # horizontal
+            c.create_oval(cx - 12, cy + 8, cx - 4, cy + 16, fill=C_WHEEL, outline="#080808")
+            c.create_oval(cx + 4, cy + 8, cx + 12, cy + 16, fill=C_WHEEL, outline="#080808")
+        else:  # vertical
+            c.create_oval(cx - 16, cy - 6, cx - 8, cy + 2, fill=C_WHEEL, outline="#080808")
+            c.create_oval(cx + 8, cy - 6, cx + 16, cy + 2, fill=C_WHEEL, outline="#080808")
+
+        # Body
+        c.create_rectangle(cx - 14, cy - 8, cx + 8, cy + 10,
+                           fill=C_FORK_BODY, outline=C_FORK_DARK, width=2)
+        # Cab
+        c.create_rectangle(cx - 12, cy - 14, cx - 2, cy - 4,
+                           fill=C_FORK_CAB, outline="#2a3848", width=1)
+        # Mast
+        c.create_line(cx + 8, cy - 12, cx + 8, cy + 8, fill=C_FORK_MAST, width=3)
+        # Forks
+        fork_y = cy + 4
+        c.create_line(cx + 8, fork_y - 3, cx + 20, fork_y - 3, fill=C_FORK_MAST, width=2)
+        c.create_line(cx + 8, fork_y + 3, cx + 20, fork_y + 3, fill=C_FORK_MAST, width=2)
+        # Headlight
+        c.create_rectangle(cx + 5, cy - 6, cx + 8, cy - 3, fill=C_YELLOW, outline="")
+
+        # Package on forks
+        if self.carrying:
+            c.create_rectangle(cx + 10, fork_y - 8, cx + 22, fork_y + 6,
+                               fill=C_PKG, outline=C_PKG_OL, width=1)
+            c.create_line(cx + 10, fork_y - 1, cx + 22, fork_y - 1, fill=C_PKG_BAND, width=1)
+
+    # ---- Simulation ----
+    def _run_simulation(self):
+        if not all([self.forklift_pos, self.package_pos, self.bay_pos]):
+            return
+
+        # Reset state
+        self.phase = PHASE_ROUTE_PKG
+        self.leg = 1
+        self.search_step = 0
+        self.move_step = 0
+        self.carrying = False
+        self.current_pos = self.forklift_pos
+        self.current_dir = (1, 0)
+
+        self.run_btn.config(state="disabled", text="RUNNING...")
+        self.btn_forklift.config(state="disabled")
+        self.btn_package.config(state="disabled")
+        self.btn_bay.config(state="disabled")
+
+        # Clear log
+        self.log_text.delete("1.0", "end")
+        self.cost_var.set("--")
+        self.nodes_var.set("--")
+        self.time_var.set("--")
+
+        # Run A* for both legs
+        t0 = time.perf_counter()
+        self.leg1_path, self.leg1_expanded, self.leg1_trace = astar(
+            self.grid, self.forklift_pos, self.package_pos
+        )
+        self.search_time1 = time.perf_counter() - t0
+
+        t0 = time.perf_counter()
+        self.leg2_path, self.leg2_expanded, self.leg2_trace = astar(
+            self.grid, self.package_pos, self.bay_pos
+        )
+        self.search_time2 = time.perf_counter() - t0
+
+        if not self.leg1_path:
+            self._log("No path to package.", "event")
+            self.status_var.set("No path to package")
+            self._enable_ui()
+            return
+        if not self.leg2_path:
+            self._log("No path to bay.", "event")
+            self.status_var.set("No path to bay")
+            self._enable_ui()
+            return
+
+        # Console output
+        total_cost = (len(self.leg1_path) - 1) + (len(self.leg2_path) - 1)
+        total_expanded = self.leg1_expanded + self.leg2_expanded
+        total_time = self.search_time1 + self.search_time2
+        print(f"Leg 1: cost={len(self.leg1_path)-1}, expanded={self.leg1_expanded}")
+        print(f"Leg 2: cost={len(self.leg2_path)-1}, expanded={self.leg2_expanded}")
+        print(f"Total: cost={total_cost}, expanded={total_expanded}, time={total_time*1000:.2f}ms")
+
+        self.cost_var.set(f"{total_cost} steps")
+        self.nodes_var.set(f"{total_expanded}")
+        self.time_var.set(f"{total_time * 1000:.2f} ms")
+
+        self.status_var.set("Searching path to package...")
+        self._update_phase_bar()
+        self._draw_grid()
+
+        # Start leg 1 search replay
+        self.root.after(300, self._tick_search)
+
+    def _tick_search(self):
+        trace = self.leg1_trace if self.leg == 1 else self.leg2_trace
+
+        if self.search_step == 0:
+            leg_label = "package" if self.leg == 1 else "bay"
+            start = self.forklift_pos if self.leg == 1 else self.package_pos
+            goal = self.package_pos if self.leg == 1 else self.bay_pos
+            self._log(f"--- A* Leg {self.leg}: to {leg_label} ---", "event")
+            self._log(f"h(n) = |x1-x2| + |y1-y2|")
+            self._log(f"From {start}  to  {goal}")
+            self._log("")
+
+        if self.search_step < len(trace):
+            entry = trace[self.search_step]
+            self._log(
+                f"[{entry['order']:>3}] ({entry['node'][0]},{entry['node'][1]})"
+                f"  g={entry['g']} h={entry['h']} f={entry['f']}"
+            )
+            self.search_step += 1
+            self.nodes_var.set(f"{self.search_step}")
+            self._draw_grid()
+            delay = max(10, EXPAND_DELAY)
+            self.root.after(delay, self._tick_search)
         else:
-            v_status.set(f"{status_label}... Step {move_step+1}/{len(path)}")
-            draw_base_grid(canvas)
-            move_step += 1
-            root.after(180, lambda: tick_move(canvas, root, v_status))
+            # Search complete for this leg
+            path = self.leg1_path if self.leg == 1 else self.leg2_path
+            cost = len(path) - 1
+            self._log("")
+            self._log(f"--- Search complete ---", "event")
+            self._log(f"Path found, cost: {cost} steps", "goal")
+            self._log("")
+            self._draw_grid()
+            self.root.after(400, self._start_move)
 
-def start_move_leg1(canvas, root, v_status):
-    global move_step, forklift_current_pos
-    move_step = 0
-    forklift_current_pos = leg1_path[0]
-    tick_move(canvas, root, v_status)
+    def _start_move(self):
+        self.move_step = 0
+        self._tick_move()
 
-def start_move_leg2(canvas, root, v_status):
-    global move_step, forklift_current_pos
-    move_step = 0
-    forklift_current_pos = leg2_path[0]
-    tick_move(canvas, root, v_status)
+    def _tick_move(self):
+        path = self.leg1_path if self.leg == 1 else self.leg2_path
 
-def trigger_pickup(canvas, root, v_status):
-    global phase, carrying, forklift_current_pos
-    phase = PHASE_PICKUP
-    carrying = True
-    forklift_current_pos = container_pos
-    v_status.set("PICKING UP PACKAGE...")
-    update_phase_bar()
-    draw_base_grid(canvas)
-    
-    # 600ms pickup pause
-    root.after(600, lambda: start_leg2_search(canvas, root, v_status))
+        if self.move_step >= len(path):
+            if self.leg == 1:
+                # Arrived at package -- pickup
+                self._do_pickup()
+            else:
+                # Arrived at bay -- delivered
+                self._do_delivered()
+            return
 
-def start_leg2_search(canvas, root, v_status):
-    global phase, sim_leg, search_step, expanded_nodes, path_result, forklift_current_pos
-    phase = PHASE_ROUTE_TO_BAY
-    sim_leg = 2
-    search_step = 0
-    forklift_current_pos = container_pos
-    expanded_nodes = leg2_expanded_order
-    path_result = leg2_path
-    v_status.set("Searching path to bay...")
-    update_phase_bar()
-    draw_base_grid(canvas)
-    
-    # Run Leg 2 search animation tick
-    root.after(200, lambda: tick_search(canvas, root, g_v_expanded, v_status))
+        cell = path[self.move_step]
 
-def finalize_mission_delivered(canvas, root, v_status):
-    global phase, carrying, forklift_highlight, forklift_current_pos
-    phase = PHASE_DELIVERED
-    carrying = False  # package delivered!
-    forklift_highlight = False
-    forklift_current_pos = bay_pos
-    v_status.set("DELIVERED ✓")
-    update_phase_bar()
-    draw_base_grid(canvas)
-    
-    # Flash chevrons loop when DELIVERED
-    def flash_chevrons_loop():
-        if phase == PHASE_DELIVERED:
-            draw_base_grid(canvas)
-            root.after(400, flash_chevrons_loop)
-    root.after(400, flash_chevrons_loop)
-    
-    # Re-enable UI buttons
-    btn_run.config(state="normal", text="▶  RUN AGAIN")
-    enable_placement_buttons()
+        # Update direction
+        if self.move_step > 0:
+            prev = path[self.move_step - 1]
+            self.current_dir = (cell[0] - prev[0], cell[1] - prev[1])
 
-# ─── Canvas Click Handler ─────────────────────────────────────────────────────
-def on_canvas_click(event):
-    global forklift_pos, container_pos, bay_pos
-    
-    # Clicks are ignored during active simulation run
-    if phase not in (PHASE_IDLE, PHASE_DELIVERED):
-        return
-        
-    cx = (event.x - PADDING) // CELL_SIZE
-    cy = (event.y - PADDING) // CELL_SIZE
-    
-    if not (0 <= cx < GRID_SIZE and 0 <= cy < GRID_SIZE):
-        return
-        
-    if (cx, cy) in OBSTACLES:
-        g_v_status.set("Cannot place on shelf obstacles!")
-        return
-        
-    # Clear coordinate if occupied by another element
-    if (cx, cy) == forklift_pos:
-        forklift_pos = None
-    if (cx, cy) == container_pos:
-        container_pos = None
-    if (cx, cy) == bay_pos:
-        bay_pos = None
-        
-    # Assign position based on place mode
-    if place_mode == "forklift":
-        forklift_pos = (cx, cy)
-    elif place_mode == "container":
-        container_pos = (cx, cy)
-    elif place_mode == "bay":
-        bay_pos = (cx, cy)
-        
-    # Recalculate which items are left to place
-    to_place = []
-    if forklift_pos is None: to_place.append("Forklift")
-    if container_pos is None: to_place.append("Container")
-    if bay_pos is None: to_place.append("Bay")
-    
-    if to_place:
-        g_v_status.set(f"Place: {', '.join(to_place)}")
-        btn_run.config(state="disabled")
-    else:
-        g_v_status.set("Ready to run mission!")
-        btn_run.config(state="normal")
-        
-    draw_base_grid(grid_canvas)
+        self.current_pos = cell
+        label = "to package" if self.leg == 1 else "to bay"
+        self._log(f"[move] -> ({cell[0]},{cell[1]})  {label}", "move")
+        self.status_var.set(f"Moving {label}... step {self.move_step + 1}/{len(path)}")
+        self._draw_grid()
+        self.move_step += 1
+        self.root.after(MOVE_DELAY, self._tick_move)
 
-# ─── Run Simulation ───────────────────────────────────────────────────────────
-def run_simulation(canvas, root, v_expanded, v_cost, v_nodes, v_status):
-    global expanded_nodes, path_result, phase, search_step, move_step, sim_leg, carrying, forklift_current_pos, forklift_highlight
-    global leg1_path, leg1_expanded_count, leg1_expanded_order
-    global leg2_path, leg2_expanded_count, leg2_expanded_order
+    def _do_pickup(self):
+        self.phase = PHASE_PICKUP
+        self.carrying = True
+        self._update_phase_bar()
+        self._log("")
+        self._log("--- Package loaded ---", "event")
+        self._log("")
+        self.status_var.set("Package picked up -- routing to bay...")
+        self._draw_grid()
 
-    if forklift_pos is None or container_pos is None or bay_pos is None:
-        return
+        # Transition to leg 2
+        self.root.after(500, self._start_leg2)
 
-    phase = PHASE_ROUTE_TO_PKG
-    sim_leg = 1
-    search_step = 0
-    move_step = 0
-    carrying = False
-    forklift_highlight = False
-    forklift_current_pos = forklift_pos
+    def _start_leg2(self):
+        self.phase = PHASE_ROUTE_BAY
+        self.leg = 2
+        self.search_step = 0
+        self._update_phase_bar()
+        self.status_var.set("Searching path to bay...")
+        self._draw_grid()
+        self.root.after(200, self._tick_search)
 
-    v_expanded.set("0")
-    v_cost.set("—")
-    v_nodes.set("—")
-    v_status.set("Running mission A*...")
-    btn_run.config(state="disabled", text="RUNNING...")
-    disable_placement_buttons()
+    def _do_delivered(self):
+        self.phase = PHASE_DELIVERED
+        self.carrying = False
+        self._update_phase_bar()
+        self._log("")
+        self._log("--- Package delivered ---", "event")
+        total_cost = (len(self.leg1_path) - 1) + (len(self.leg2_path) - 1)
+        total_exp = self.leg1_expanded + self.leg2_expanded
+        total_time = self.search_time1 + self.search_time2
+        self._log(f"Total cost:     {total_cost} steps", "goal")
+        self._log(f"Nodes expanded: {total_exp}", "goal")
+        self._log(f"Search time:    {total_time * 1000:.2f} ms", "goal")
+        self.status_var.set("Delivery complete")
+        self._draw_grid()
+        self._enable_ui()
 
-    # Construct obstacle grid representation
-    grid = [[0] * GRID_SIZE for _ in range(GRID_SIZE)]
-    for ox, oy in OBSTACLES:
-        grid[oy][ox] = 1
+    def _enable_ui(self):
+        self.run_btn.config(state="normal", text="RUN AGAIN")
+        self.btn_forklift.config(state="normal")
+        self.btn_package.config(state="normal")
+        self.btn_bay.config(state="normal")
+        self._update_placement_btns()
 
-    # Solve Leg 1: forklift start to container
-    path1, count1, order1 = astar(grid, forklift_pos, container_pos)
-    # Solve Leg 2: container to bay
-    path2, count2, order2 = astar(grid, container_pos, bay_pos)
+    def _reset(self):
+        self.forklift_pos = None
+        self.package_pos = None
+        self.bay_pos = None
+        self.phase = PHASE_IDLE
+        self.leg = 1
+        self.search_step = 0
+        self.move_step = 0
+        self.carrying = False
+        self.current_pos = None
+        self.current_dir = (1, 0)
+        self.leg1_path = []
+        self.leg1_trace = []
+        self.leg1_expanded = 0
+        self.leg2_path = []
+        self.leg2_trace = []
+        self.leg2_expanded = 0
 
-    if not path1:
-        v_status.set("No path to container!")
-        btn_run.config(state="normal", text="▶  RUN SIMULATION")
-        enable_placement_buttons()
-        return
-    if not path2:
-        v_status.set("No path to bay!")
-        btn_run.config(state="normal", text="▶  RUN SIMULATION")
-        enable_placement_buttons()
-        return
+        self.cost_var.set("--")
+        self.nodes_var.set("--")
+        self.time_var.set("--")
+        self.status_var.set("Select placement mode, then click grid")
+        self.run_btn.config(state="disabled", text="RUN SIMULATION")
 
-    # Cache leg data
-    leg1_path = path1
-    leg1_expanded_count = count1
-    leg1_expanded_order = order1
+        self.log_text.delete("1.0", "end")
+        self._log("--- Reset ---", "event")
+        self._log("Place FORKLIFT, PACKAGE, BAY", "info")
+        self._log("Then press RUN SIMULATION", "info")
 
-    leg2_path = path2
-    leg2_expanded_count = count2
-    leg2_expanded_order = order2
+        self._enable_ui()
+        self._draw_grid()
+        self._update_phase_bar()
 
-    # Output details to console
-    leg1_cost = len(path1) - 1
-    leg2_cost = len(path2) - 1
-    full_path = path1 + path2[1:]
-    print(f"Leg 1 — cost: {leg1_cost}, expanded: {count1}")
-    print(f"Leg 2 — cost: {leg2_cost}, expanded: {count2}")
-    print(f"Full path: {full_path}")
 
-    # Set initial metrics
-    v_cost.set(str(leg1_cost + leg2_cost))
-    v_nodes.set(str(count1 + count2))
-
-    # Initialize leg 1 search animation properties
-    expanded_nodes = leg1_expanded_order
-    path_result = leg1_path
-    
-    update_phase_bar()
-    draw_base_grid(canvas)
-    root.after(200, lambda: tick_search(canvas, root, v_expanded, v_status))
-
-# ─── Main Application Builder ─────────────────────────────────────────────────
+# ============================================================
+# 5. Main
+# ============================================================
 def main():
-    global grid_canvas, btn_run, btn_set_forklift, btn_set_container, btn_set_bay, phase_bar
-    global g_v_expanded, g_v_cost, g_v_nodes, g_v_status
-
     root = tk.Tk()
-    root.title("Warehouse Mission")
-    root.configure(bg=C_BG)
-    root.resizable(False, False)
-
-    canvas_size = PADDING * 2 + GRID_SIZE * CELL_SIZE  # 540px
-    total_w = canvas_size + PANEL_W
-
-    root.geometry(f"{total_w}x{canvas_size}+{(root.winfo_screenwidth()-total_w)//2}+{(root.winfo_screenheight()-canvas_size)//2}")
-
-    # Left Side Canvas Frame
-    left = tk.Frame(root, bg=C_BG)
-    left.pack(side="left", fill="both")
-    grid_canvas = tk.Canvas(
-        left, width=canvas_size, height=canvas_size,
-        bg=C_GRID_BG, highlightthickness=0
-    )
-    grid_canvas.pack(fill="both", expand=True)
-    grid_canvas.bind("<Button-1>", on_canvas_click)
-
-    # Right Side Panel Frame
-    right_outer = tk.Frame(root, bg=C_PANEL, width=PANEL_W)
-    right_outer.pack(side="right", fill="both")
-    right_outer.pack_propagate(False)
-
-    right = tk.Frame(right_outer, bg=C_PANEL)
-    right.pack(fill="both", expand=True)
-
-    def sep():
-        tk.Frame(right, bg=C_BORDER, height=1).pack(side="top", fill="x", padx=12, pady=3)
-
-    # Pinned Run Button packed first with side="bottom" and expand=True
-    btn_run = tk.Button(
-        right, text="▶  RUN SIMULATION",
-        bg=C_ACCENT, fg=C_BG,
-        activebackground="#81d4fa", activeforeground=C_BG,
-        font=("Courier", 9, "bold"),
-        relief="flat", cursor="hand2",
-        padx=6, pady=6,
-        command=lambda: run_simulation(
-            grid_canvas, root, g_v_expanded, g_v_cost, g_v_nodes, g_v_status)
-    )
-    btn_run.pack(side="bottom", fill="x", padx=12, pady=(0, 10), expand=True)
-    btn_run.config(state="disabled")
-
-    # 5. Panel title area with Forklift ASCII art and cyan underline separator
-    title_frame = tk.Frame(right, bg=C_PANEL)
-    title_frame.pack(side="top", fill="x", pady=(5, 0))
-    
-    art_text = (
-        "  ╔═══╗      \n"
-        "  ║ 🚜 ║═════\n"
-        "  ╚═╦═╦╝     \n"
-        "    ╚═╝      "
-    )
-    tk.Label(title_frame, text=art_text, bg=C_PANEL, fg=C_ACCENT,
-             font=("Courier", 8, "bold"), justify="left").pack(pady=(2, 0))
-             
-    tk.Label(title_frame, text="WAREHOUSE MISSION", bg=C_PANEL, fg=C_ACCENT,
-             font=("Courier", 10, "bold")).pack(pady=(2, 0))
-             
-    underline = tk.Frame(title_frame, bg=C_ACCENT, height=2)
-    underline.pack(fill="x", padx=12, pady=(4, 0))
-    
-    # Placement Mode Buttons
-    btn_frame = tk.Frame(right, bg=C_PANEL)
-    btn_frame.pack(side="top", fill="x", padx=12, pady=(5, 0))
-    
-    btn_set_forklift = tk.Button(
-        btn_frame, text="FORKLIFT", font=("Courier", 7, "bold"),
-        relief="flat", cursor="hand2", bg="#2a2d3a", fg=C_TEXT_DIM,
-        padx=4, pady=4, command=lambda: select_place_mode("forklift")
-    )
-    btn_set_forklift.pack(side="left", expand=True, fill="x", padx=1)
-    
-    btn_set_container = tk.Button(
-        btn_frame, text="PACKAGE", font=("Courier", 7, "bold"),
-        relief="flat", cursor="hand2", bg="#2a2d3a", fg=C_TEXT_DIM,
-        padx=4, pady=4, command=lambda: select_place_mode("container")
-    )
-    btn_set_container.pack(side="left", expand=True, fill="x", padx=1)
-    
-    btn_set_bay = tk.Button(
-        btn_frame, text="BAY", font=("Courier", 7, "bold"),
-        relief="flat", cursor="hand2", bg="#2a2d3a", fg=C_TEXT_DIM,
-        padx=4, pady=4, command=lambda: select_place_mode("bay")
-    )
-    btn_set_bay.pack(side="left", expand=True, fill="x", padx=1)
-
-    sep()
-
-    # Pipeline
-    pipeline_frame = tk.Frame(right, bg=C_PANEL)
-    pipeline_frame.pack(side="top", fill="x", padx=12)
-    tk.Label(pipeline_frame, text="PIPELINE", bg=C_PANEL, fg=C_TEXT_DIM,
-             font=("Courier", 7, "bold")).pack(anchor="w")
-    pipe = tk.Frame(pipeline_frame, bg=C_PANEL)
-    pipe.pack(side="top", fill="x", pady=(1, 2))
-    phase_bar = []
-    for lbl in PHASES_LABELS:
-        row = tk.Frame(pipe, bg=C_PANEL)
-        row.pack(side="top", fill="x", pady=0)
-        dot = tk.Label(row, text="●", bg=C_PANEL, fg=C_BORDER, font=("Courier", 8))
-        dot.pack(side="left")
-        ltxt = tk.Label(row, text=lbl, bg=C_PANEL, fg=C_TEXT_DIM, font=("Courier", 7))
-        ltxt.pack(side="left", padx=3)
-        phase_bar.append((dot, ltxt))
-
-    sep()
-
-    # Metrics
-    metrics_frame = tk.Frame(right, bg=C_PANEL)
-    metrics_frame.pack(side="top", fill="x", padx=12)
-    tk.Label(metrics_frame, text="METRICS", bg=C_PANEL, fg=C_TEXT_DIM,
-             font=("Courier", 7, "bold")).pack(anchor="w")
-
-    g_v_expanded = tk.StringVar(value="0")
-    g_v_cost     = tk.StringVar(value="—")
-    g_v_nodes    = tk.StringVar(value="—")
-    g_v_status   = tk.StringVar(value="Place: Forklift, Container, Bay")
-
-    def stat(label, var, color):
-        f = tk.Frame(metrics_frame, bg=C_PANEL)
-        f.pack(side="top", fill="x", pady=1)
-        tk.Label(f, text=label, bg=C_PANEL, fg=C_TEXT_DIM, font=("Courier", 7)).pack(anchor="w")
-        tk.Label(f, textvariable=var, bg=C_PANEL, fg=color, font=("Courier", 10, "bold"), wraplength=180, justify="left").pack(anchor="w")
-
-    stat("NODES EXPANDED (live)", g_v_expanded, C_ACCENT)
-    stat("TOTAL COST (both legs)", g_v_cost,     C_ACCENT2)
-    stat("MISSION STATUS",        g_v_status,   C_TEXT)
-
-    sep()
-
-    # Legend
-    legend_frame = tk.Frame(right, bg=C_PANEL)
-    legend_frame.pack(side="top", fill="x", padx=12)
-    tk.Label(legend_frame, text="LEGEND", bg=C_PANEL, fg=C_TEXT_DIM,
-             font=("Courier", 7, "bold")).pack(anchor="w")
-    leg = tk.Frame(legend_frame, bg=C_PANEL)
-    leg.pack(side="top", fill="x", pady=(1, 2))
-
-    def lrow(col, label, ol=None):
-        f = tk.Frame(leg, bg=C_PANEL)
-        f.pack(side="top", fill="x", pady=0)
-        b = tk.Canvas(f, width=10, height=10, bg=C_PANEL, highlightthickness=0)
-        b.pack(side="left", padx=(0, 6))
-        b.create_rectangle(0, 0, 9, 9, fill=col, outline=ol or col)
-        tk.Label(f, text=label, bg=C_PANEL, fg=C_TEXT_DIM, font=("Courier", 7)).pack(side="left")
-
-    lrow(C_FORKLIFT,  "Forklift",   "#b3e5fc")
-    lrow(C_CONTAINER, "Container",  C_CONTAINER)
-    lrow(C_GOAL,      "Loading bay",C_WARN)
-    lrow(C_OBSTACLE,  "Shelf",      "#7a5080")
-    lrow(C_VISITED,   "Expanded",   C_BORDER)
-    lrow(C_PATH,      "Path",       C_ACCENT2)
-
-    update_placement_buttons()
-    draw_base_grid(grid_canvas)
-    update_phase_bar()
+    WarehouseApp(root)
     root.mainloop()
+
 
 if __name__ == "__main__":
     main()
