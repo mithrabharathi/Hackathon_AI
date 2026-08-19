@@ -172,30 +172,69 @@ def draw_base_grid(canvas):
             if cell == forklift_pos:
                 # Forklift start marker: cyan border, dim fill
                 fill, ol, w = C_START, C_FORKLIFT, 2
+                canvas.create_rectangle(x1, y1, x2, y2, fill=fill, outline=ol, width=w)
             elif cell == container_pos and not carrying:
-                # Container: orange filled cell
-                fill, ol, w = C_CONTAINER, C_CONTAINER, 1
+                # 2. Container/Package drawing: wooden crate box with horizontal/vertical plank lines
+                px1, py1, px2, py2 = x1 + 6, y1 + 6, x2 - 6, y2 - 6
+                canvas.create_rectangle(px1, py1, px2, py2, fill="#bf360c", outline="#e64a19", width=2)
+                # Plank lines
+                canvas.create_line(px1 + 2, py1 + 10, px2 - 2, py1 + 10, fill="#d84315", width=1)
+                canvas.create_line(px1 + 2, py1 + 20, px2 - 2, py1 + 20, fill="#d84315", width=1)
+                canvas.create_line(px1 + 2, py1 + 30, px2 - 2, py1 + 30, fill="#d84315", width=1)
+                canvas.create_line(px1 + 10, py1 + 2, px1 + 10, py2 - 2, fill="#d84315", width=1)
+                canvas.create_line(px1 + 20, py1 + 2, px1 + 20, py2 - 2, fill="#d84315", width=1)
+                canvas.create_line(px1 + 30, py1 + 2, px1 + 30, py2 - 2, fill="#d84315", width=1)
+                # White label in center
+                cx, cy = cell_center(x, y)
+                canvas.create_rectangle(cx - 10, cy - 6, cx + 10, cy + 6, fill="#ffffff", outline="")
+                canvas.create_text(cx, cy, text="PKG", fill="#0f1117", font=("Courier", 6, "bold"))
             elif cell == bay_pos:
-                # Bay: dark red cell with light red border
-                fill, ol, w = C_GOAL, C_WARN, 2
-            elif cell in OBSTACLES:
-                fill, ol, w = C_OBSTACLE, "#5a4060", 1
-            elif cell in path_set:
-                fill, ol, w = C_PATH, C_BORDER, 1
-            elif cell in visited_set:
-                fill, ol, w = C_VISITED, C_BORDER, 1
-            else:
-                fill, ol, w = C_FREE, C_BORDER, 1
+                # 3. Loading Bay drawing: striped floor pattern in #3a1a1a and #4a2020 diagonal stripes
+                canvas.create_rectangle(x1, y1, x2, y2, fill="#3a1a1a", outline="#ef9a9a", width=2)
+                for offset in range(-52, 104, 14):
+                    canvas.create_line(x1, y1 + offset, x1 + 52, y1 + offset + 52, fill="#4a2020", width=5)
+                # Redraw border outline
+                canvas.create_rectangle(x1, y1, x2, y2, fill="", outline="#ef9a9a", width=2)
                 
-            canvas.create_rectangle(x1, y1, x2, y2, fill=fill, outline=ol, width=w)
-
-    # Draw shelf details
-    for (ox, oy) in OBSTACLES:
-        x1, y1, x2, y2 = cell_coords(ox, oy)
-        mx = (x1 + x2) // 2
-        for row in [y1 + 10, y1 + 26, y1 + 42]:
-            canvas.create_line(x1 + 6, row, x2 - 6, row, fill="#7a5080", width=1)
-        canvas.create_line(mx, y1 + 6, mx, y2 - 6, fill="#7a5080", width=1)
+                cx, cy = cell_center(x, y)
+                canvas.create_text(cx, cy + 4, text="BAY", fill="#ef9a9a", font=("Courier", 10, "bold"))
+                
+                # Flashing yellow chevrons pointing inward when phase is DELIVERED
+                if phase == PHASE_DELIVERED:
+                    import time
+                    if int(time.time() * 2.5) % 2 == 0:
+                        canvas.create_text(cx - 16, cy - 8, text="▶▶", fill="#ffd54f", font=("Courier", 8, "bold"))
+                        canvas.create_text(cx + 16, cy - 8, text="◀◀", fill="#ffd54f", font=("Courier", 8, "bold"))
+                    else:
+                        canvas.create_text(cx - 16, cy - 8, text="▶▶", fill="#4a3520", font=("Courier", 8, "bold"))
+                        canvas.create_text(cx + 16, cy - 8, text="◀◀", fill="#4a3520", font=("Courier", 8, "bold"))
+            elif cell in OBSTACLES:
+                # 4. Shelf/Obstacle drawing: dark upright posts in #6a1b9a, horizontal boards, tiny boxes
+                canvas.create_rectangle(x1, y1, x2, y2, fill="#3a3040", outline="#5a4060", width=1)
+                canvas.create_rectangle(x1 + 4, y1 + 2, x1 + 7, y2 - 2, fill="#6a1b9a", outline="")
+                canvas.create_rectangle(x2 - 7, y1 + 2, x2 - 4, y2 - 2, fill="#6a1b9a", outline="")
+                for sy in [y1 + 14, y1 + 28, y1 + 42]:
+                    canvas.create_rectangle(x1 + 4, sy - 1, x2 - 4, sy + 1, fill="#8e24aa", outline="")
+                # Tiny boxes
+                canvas.create_rectangle(x1 + 10, y1 + 7, x1 + 15, y1 + 13, fill="#ce93d8", outline="")
+                canvas.create_rectangle(x1 + 22, y1 + 8, x1 + 28, y1 + 13, fill="#ce93d8", outline="")
+                canvas.create_rectangle(x1 + 16, y1 + 21, x1 + 22, y1 + 27, fill="#ce93d8", outline="")
+                canvas.create_rectangle(x1 + 28, y1 + 22, x1 + 33, y1 + 27, fill="#ce93d8", outline="")
+                canvas.create_rectangle(x1 + 12, y1 + 35, x1 + 18, y1 + 41, fill="#ce93d8", outline="")
+                canvas.create_rectangle(x1 + 24, y1 + 36, x1 + 30, y1 + 41, fill="#ce93d8", outline="")
+            else:
+                # Draw standard grid cells
+                if cell in path_set:
+                    fill, ol, w = C_PATH, C_BORDER, 1
+                elif cell in visited_set:
+                    fill, ol, w = C_VISITED, C_BORDER, 1
+                else:
+                    fill, ol, w = C_FREE, C_BORDER, 1
+                canvas.create_rectangle(x1, y1, x2, y2, fill=fill, outline=ol, width=w)
+                
+                # 9. Cell coordinate labels: draw tiny (x,y) coordinates in corners in IDLE/placement phase
+                if phase in (PHASE_IDLE, PHASE_DELIVERED):
+                    canvas.create_text(x1 + 12, y1 + 8, text=f"{x},{y}", fill="#2a3a4a", font=("Courier", 6))
 
     # Draw START text label inside forklift start cell
     if forklift_pos is not None:
@@ -203,48 +242,156 @@ def draw_base_grid(canvas):
         canvas.create_text(cx, cy - 5, text="▶", fill=C_ACCENT, font=("Courier", 11, "bold"))
         canvas.create_text(cx, cy + 8, text="START", fill=C_ACCENT, font=("Courier", 6, "bold"))
 
-    # Draw container box icon and text inside container cell
-    if container_pos is not None and not carrying:
-        cx, cy = cell_center(*container_pos)
-        canvas.create_text(cx, cy, text="■", fill="#ffffff", font=("Courier", 12, "bold"))
-
-    # Draw BAY text label inside goal cell
-    if bay_pos is not None:
-        cx, cy = cell_center(*bay_pos)
-        canvas.create_text(cx, cy - 5, text="◉", fill=C_WARN, font=("Courier", 11, "bold"))
-        canvas.create_text(cx, cy + 8, text="BAY", fill=C_WARN, font=("Courier", 6, "bold"))
-
-    # Overlay green dots for path cells (excluding key targets)
+    # 7. Path visualization: small arrow chevrons rotated in direction of travel
     if path_set:
-        for px, py in path_set:
-            if (px, py) in (forklift_pos, container_pos, bay_pos):
+        for i in range(len(path_result)):
+            cell = path_result[i]
+            if cell in (forklift_pos, container_pos, bay_pos):
                 continue
-            cx2, cy2 = cell_center(px, py)
-            canvas.create_oval(cx2 - 3, cy2 - 3, cx2 + 3, cy2 + 3, fill=C_ACCENT2, outline="")
+            if cell not in path_set:
+                continue
+            cx2, cy2 = cell_center(cell[0], cell[1])
+            
+            arrow = "▶"
+            if i < len(path_result) - 1:
+                next_cell = path_result[i + 1]
+                dx = next_cell[0] - cell[0]
+                dy = next_cell[1] - cell[1]
+                if dx > 0: arrow = "▶"
+                elif dx < 0: arrow = "◀"
+                elif dy > 0: arrow = "▼"
+                elif dy < 0: arrow = "▲"
+            canvas.create_text(cx2, cy2, text=arrow, fill=C_ACCENT2, font=("Courier", 10, "bold"))
+
+    # 6. Expanded node visualization: draw small diamond shape in #1a3a5a centered
+    if visited_set:
+        for vx, vy in visited_set:
+            if (vx, vy) in (forklift_pos, container_pos, bay_pos):
+                continue
+            cx3, cy3 = cell_center(vx, vy)
+            canvas.create_polygon(cx3, cy3 - 6, cx3 + 6, cy3, cx3, cy3 + 6, cx3 - 6, cy3, fill="#1a3a5a", outline="#2196f3", width=1)
 
     # Render forklift if active
     if forklift_current_pos is not None:
         draw_forklift(canvas, forklift_current_pos[0], forklift_current_pos[1], carrying, forklift_highlight)
 
+    # 8. Glowing Grid border around canvas
+    canvas.create_rectangle(1, 1, canvas_w - 1, canvas_h - 1, outline="#4fc3f7", width=2)
+    canvas.create_rectangle(3, 3, canvas_w - 3, canvas_h - 3, outline="#1565c0", width=1)
+
 def draw_forklift(canvas, x, y, carrying, highlight=False):
+    # 1. Forklift drawing using canvas primitives
     x1, y1, x2, y2 = cell_coords(x, y)
-    pad = 8
-    col = "#ffffff" if highlight else C_FORKLIFT
-    canvas.create_rectangle(
-        x1 + pad, y1 + pad, x2 - pad, y2 - pad,
-        fill=col, outline="#b3e5fc", width=2
-    )
     cx, cy = cell_center(x, y)
-    canvas.create_oval(cx - 3, cy - 3, cx + 3, cy + 3, fill=C_BG, outline="")
     
-    # Carrying indicator: small orange square drawn on top-right corner of forklift rect
-    if carrying:
-        rx2 = x2 - pad
-        ry1 = y1 + pad
-        canvas.create_rectangle(
-            rx2 - 6, ry1, rx2 + 2, ry1 + 8,
-            fill="#e65100", outline="#ffffff", width=1
-        )
+    # Determine orientation direction based on path
+    direction = "right"
+    path = leg1_path if sim_leg == 1 else leg2_path
+    if path and (x, y) in path:
+        idx = path.index((x, y))
+        if idx < len(path) - 1:
+            nx, ny = path[idx + 1]
+            if nx > x: direction = "right"
+            elif nx < x: direction = "left"
+            elif ny > y: direction = "down"
+            elif ny < y: direction = "up"
+        elif idx > 0:
+            px, py = path[idx - 1]
+            if x > px: direction = "right"
+            elif x < px: direction = "left"
+            elif y > py: direction = "down"
+            elif y < py: direction = "up"
+            
+    body_col = "#ffffff" if highlight else "#1565c0"
+    ol_col = "#cccccc" if highlight else "#0d47a1"
+    
+    if direction == "right":
+        # Wheels
+        canvas.create_oval(cx - 10, cy - 13, cx - 4, cy - 9, fill="#263238", outline="#1a1a1a")
+        canvas.create_oval(cx - 10, cy + 9, cx - 4, cy + 13, fill="#263238", outline="#1a1a1a")
+        canvas.create_oval(cx + 2, cy - 13, cx + 8, cy - 9, fill="#263238", outline="#1a1a1a")
+        canvas.create_oval(cx + 2, cy + 9, cx + 8, cy + 13, fill="#263238", outline="#1a1a1a")
+        # Forks
+        canvas.create_line(cx + 10, cy - 5, cx + 20, cy - 5, fill="#4fc3f7", width=2)
+        canvas.create_line(cx + 10, cy + 5, cx + 20, cy + 5, fill="#4fc3f7", width=2)
+        # Package on forks
+        if carrying:
+            canvas.create_rectangle(cx + 11, cy - 8, cx + 19, cy + 8, fill="#e65100", outline="#ffffff", width=1)
+        # Mast
+        canvas.create_line(cx + 8, cy - 10, cx + 8, cy + 10, fill="#90caf9", width=1.5)
+        canvas.create_line(cx + 10, cy - 10, cx + 10, cy + 10, fill="#90caf9", width=1.5)
+        # Body
+        canvas.create_rectangle(cx - 14, cy - 10, cx + 8, cy + 10, fill=body_col, outline=ol_col)
+        # Cabin
+        canvas.create_rectangle(cx - 12, cy - 14, cx - 2, cy + 8, fill="#1976d2", outline=ol_col)
+        # Headlight
+        canvas.create_oval(cx + 6, cy - 7, cx + 9, cy - 4, fill="#ffd54f", outline="")
+        
+    elif direction == "left":
+        # Wheels
+        canvas.create_oval(cx - 8, cy - 13, cx - 2, cy - 9, fill="#263238", outline="#1a1a1a")
+        canvas.create_oval(cx - 8, cy + 9, cx - 2, cy + 13, fill="#263238", outline="#1a1a1a")
+        canvas.create_oval(cx + 4, cy - 13, cx + 10, cy - 9, fill="#263238", outline="#1a1a1a")
+        canvas.create_oval(cx + 4, cy + 9, cx + 10, cy + 13, fill="#263238", outline="#1a1a1a")
+        # Forks
+        canvas.create_line(cx - 10, cy - 5, cx - 20, cy - 5, fill="#4fc3f7", width=2)
+        canvas.create_line(cx - 10, cy + 5, cx - 20, cy + 5, fill="#4fc3f7", width=2)
+        # Package on forks
+        if carrying:
+            canvas.create_rectangle(cx - 19, cy - 8, cx - 11, cy + 8, fill="#e65100", outline="#ffffff", width=1)
+        # Mast
+        canvas.create_line(cx - 8, cy - 10, cx - 8, cy + 10, fill="#90caf9", width=1.5)
+        canvas.create_line(cx - 10, cy - 10, cx - 10, cy + 10, fill="#90caf9", width=1.5)
+        # Body
+        canvas.create_rectangle(cx - 8, cy - 10, cx + 14, cy + 10, fill=body_col, outline=ol_col)
+        # Cabin
+        canvas.create_rectangle(cx + 2, cy - 14, cx + 12, cy + 8, fill="#1976d2", outline=ol_col)
+        # Headlight
+        canvas.create_oval(cx - 9, cy - 7, cx - 6, cy - 4, fill="#ffd54f", outline="")
+        
+    elif direction == "down":
+        # Wheels
+        canvas.create_oval(cx - 13, cy - 10, cx - 9, cy - 4, fill="#263238", outline="#1a1a1a")
+        canvas.create_oval(cx + 9, cy - 10, cx + 13, cy - 4, fill="#263238", outline="#1a1a1a")
+        canvas.create_oval(cx - 13, cy + 2, cx - 9, cy + 8, fill="#263238", outline="#1a1a1a")
+        canvas.create_oval(cx + 9, cy + 2, cx + 13, cy + 8, fill="#263238", outline="#1a1a1a")
+        # Forks
+        canvas.create_line(cx - 5, cy + 10, cx - 5, cy + 20, fill="#4fc3f7", width=2)
+        canvas.create_line(cx + 5, cy + 10, cx + 5, cy + 20, fill="#4fc3f7", width=2)
+        # Package on forks
+        if carrying:
+            canvas.create_rectangle(cx - 8, cy + 11, cx + 8, cy + 19, fill="#e65100", outline="#ffffff", width=1)
+        # Mast
+        canvas.create_line(cx - 10, cy + 8, cx + 10, cy + 8, fill="#90caf9", width=1.5)
+        canvas.create_line(cx - 10, cy + 10, cx + 10, cy + 10, fill="#90caf9", width=1.5)
+        # Body
+        canvas.create_rectangle(cx - 10, cy - 14, cx + 10, cy + 8, fill=body_col, outline=ol_col)
+        # Cabin
+        canvas.create_rectangle(cx - 8, cy - 12, cx + 8, cy - 2, fill="#1976d2", outline=ol_col)
+        # Headlight
+        canvas.create_oval(cx + 5, cy + 5, cx + 8, cy + 8, fill="#ffd54f", outline="")
+        
+    elif direction == "up":
+        # Wheels
+        canvas.create_oval(cx - 13, cy - 8, cx - 9, cy - 2, fill="#263238", outline="#1a1a1a")
+        canvas.create_oval(cx + 9, cy - 8, cx + 13, cy - 2, fill="#263238", outline="#1a1a1a")
+        canvas.create_oval(cx - 13, cy + 4, cx - 9, cy + 10, fill="#263238", outline="#1a1a1a")
+        canvas.create_oval(cx + 9, cy + 4, cx + 13, cy + 10, fill="#263238", outline="#1a1a1a")
+        # Forks
+        canvas.create_line(cx - 5, cy - 10, cx - 5, cy - 20, fill="#4fc3f7", width=2)
+        canvas.create_line(cx + 5, cy - 10, cx + 5, cy - 20, fill="#4fc3f7", width=2)
+        # Package on forks
+        if carrying:
+            canvas.create_rectangle(cx - 8, cy - 19, cx + 8, cy - 11, fill="#e65100", outline="#ffffff", width=1)
+        # Mast
+        canvas.create_line(cx - 10, cy - 8, cx + 10, cy - 8, fill="#90caf9", width=1.5)
+        canvas.create_line(cx - 10, cy - 10, cx + 10, cy - 10, fill="#90caf9", width=1.5)
+        # Body
+        canvas.create_rectangle(cx - 10, cy - 8, cx + 10, cy + 14, fill=body_col, outline=ol_col)
+        # Cabin
+        canvas.create_rectangle(cx - 8, cy + 2, cx + 8, cy + 12, fill="#1976d2", outline=ol_col)
+        # Headlight
+        canvas.create_oval(cx - 8, cy - 8, cx - 5, cy - 5, fill="#ffd54f", outline="")
 
 # ─── Visual Pipeline ──────────────────────────────────────────────────────────
 C_FUTURE_DOT    = "#4a4e5d"
@@ -398,6 +545,13 @@ def finalize_mission_delivered(canvas, root, v_status):
     v_status.set("DELIVERED ✓")
     update_phase_bar()
     draw_base_grid(canvas)
+    
+    # Flash chevrons loop when DELIVERED
+    def flash_chevrons_loop():
+        if phase == PHASE_DELIVERED:
+            draw_base_grid(canvas)
+            root.after(400, flash_chevrons_loop)
+    root.after(400, flash_chevrons_loop)
     
     # Re-enable UI buttons
     btn_run.config(state="normal", text="▶  RUN AGAIN")
@@ -576,11 +730,24 @@ def main():
     btn_run.pack(side="bottom", fill="x", padx=12, pady=(0, 10), expand=True)
     btn_run.config(state="disabled")
 
-    # Title
+    # 5. Panel title area with Forklift ASCII art and cyan underline separator
     title_frame = tk.Frame(right, bg=C_PANEL)
-    title_frame.pack(side="top", fill="x", pady=(8, 0))
+    title_frame.pack(side="top", fill="x", pady=(5, 0))
+    
+    art_text = (
+        "  ╔═══╗      \n"
+        "  ║ 🚜 ║═════\n"
+        "  ╚═╦═╦╝     \n"
+        "    ╚═╝      "
+    )
+    tk.Label(title_frame, text=art_text, bg=C_PANEL, fg=C_ACCENT,
+             font=("Courier", 8, "bold"), justify="left").pack(pady=(2, 0))
+             
     tk.Label(title_frame, text="WAREHOUSE MISSION", bg=C_PANEL, fg=C_ACCENT,
-             font=("Courier", 10, "bold")).pack()
+             font=("Courier", 10, "bold")).pack(pady=(2, 0))
+             
+    underline = tk.Frame(title_frame, bg=C_ACCENT, height=2)
+    underline.pack(fill="x", padx=12, pady=(4, 0))
     
     # Placement Mode Buttons
     btn_frame = tk.Frame(right, bg=C_PANEL)
